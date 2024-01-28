@@ -3,10 +3,26 @@ debug = True
 
 
 class Parser:
-    def __init__(self, infile):
-        self.file = infile
+    # parses each VM command into its lexical elements
+    def __init__(self, f_name):
+        self.file = open(f_name, 'r')
         self.commandType = None
-        self.location = None
+        self.arg1 = None
+        self.arg2 = None
+        self.comment = None
+        self.d_class = {
+            "push": "C_PUSH",
+            "pop": "C_POP",
+            "add": "C_ARITHMETIC",
+            "sub": "C_ARITHMETIC",
+            "neg": "C_ARITHMETIC",
+            "eq": "C_ARITHMETIC",
+            "gt": "C_ARITHMETIC",
+            "lt": "C_ARITHMETIC",
+            "and": "C_ARITHMETIC",
+            "or": "C_ARITHMETIC",
+            "not": "C_ARITHMETIC"
+        }
 
     def has_more_commands(self):
         cur_pos = self.file.tell()
@@ -16,7 +32,8 @@ class Parser:
 
     def advance(self):
         self.commandType = None
-        self.location = None
+        self.arg1 = None
+        self.arg2 = None
         line = self.file.readline().rstrip()
         if debug:
             print('line before: ', line)
@@ -28,42 +45,241 @@ class Parser:
         if not line:
             print('line empty')
             return
+        self.comment = "// " + line + "\n"
         line = line.split()
-        if line[0] == "push":
-            self.commandType = line[0]
-            self.location = line[2]
+        if line[0] in self.d_class:
+            self.commandType = self.d_class[line[0]]
+        if self.commandType == "C_PUSH":
+            self.arg1 = line[1]
+            self.arg2 = line[2]
+        elif self.commandType == "C_POP":
+            self.arg1 = line[1]
+            self.arg2 = line[2]
+        elif self.commandType == "C_ARITHMETIC":
+            self.arg1 = line[0]
+
+    def close(self):
+        self.file.close()
 
 
-class Code:
-    d_symbol = {
-        "push": "@{0}\nD=A\n@SP\nA=M\nM=D\n@SP\nM=M+1\n"
-    }
+class CodeWriter:
+    # writes the assembly code that implements the parsed command
+    def __init__(self, prog_name):
+        self.cnt = 0
+        self.prog_name = prog_name
+        self.file = outfile = open(prog_name + '.asm', 'w')
+        self._d_symbol = {
+            # addr = segmentPointer + i, *SP = *addr, SP++
+            "C_PUSH": "@{0}\nD=A\n@SP\nA=M\nM=D\n@SP\nM=M+1\n",
+            # addr = segmentPointer + i, *SP--, *addr = *SP
+            "C_POP": "@{0}\nD=M\n@SP\nM=M-1\n@SP\nA=M\nM=D\n",
+            "C_PUSH_pointer": "@{0}\nD=A\n@SP\nA=M\nM=D\n@SP\nM=M+1\n",
+            "add": ("@SP\n"
+                    "M=M-1\n"
+                    "A=M\n"
+                    "D=M\n"
+                    "@SP\n"
+                    "M=M-1\n"
+                    "A=M\n"
+                    "M=D+M\n"
+                    "@SP\n"
+                    "M=M+1\n"),
+            "sub": ("@SP\n"
+                    "M=M-1\n"
+                    "A=M\n"
+                    "D=M\n"
+                    "@SP\n"
+                    "M=M-1\n"
+                    "A=M\n"
+                    "M=M-D\n"
+                    "@SP\n"
+                    "M=M+1\n"),
+            "neg": ("@SP\n"
+                    "M=M-1\n"
+                    "A=M\n"
+                    "M=-M\n"
+                    "@SP\n"
+                    "M=M+1\n"),
+            "and": ("@SP\n"
+                    "M=M-1\n"
+                    "A=M\n"
+                    "D=M\n"
+                    "@SP\n"
+                    "M=M-1\n"
+                    "A=M\n"
+                    "M=D&M\n"
+                    "@SP\n"
+                    "M=M+1\n"),
+            "or": ("@SP\n"
+                    "M=M-1\n"
+                    "A=M\n"
+                    "D=M\n"
+                    "@SP\n"
+                    "M=M-1\n"
+                    "A=M\n"
+                    "M=D|M\n"
+                    "@SP\n"
+                    "M=M+1\n"),
+            "not": ("@SP\n"
+                    "M=M-1\n"
+                    "A=M\n"
+                    "M=!M\n"
+                    "@SP\n"
+                    "M=M+1\n"),
+            "eq": ("@SP\n"
+                   "M=M-1\n"
+                   "A=M\n"
+                   "D=M\n"
+                   "@SP\n"
+                   "M=M-1\n"
+                   "A=M\n"
+                   "D=M-D\n"
+                   "@IS_EQ_{0}\n"
+                   "D;JEQ\n"
+                   "(NOT_EQ_{0})\n"
+                   "D=0\n"
+                   "@SET_RESULT_{0}\n"
+                   "0;JMP\n"
+                   "(IS_EQ_{0})\n"
+                   "D=-1\n"
+                   "(SET_RESULT_{0})\n"
+                   "@SP\n"
+                   "A=M\n"
+                   "M=D\n"
+                   "@SP\n"
+                   "M=M+1\n"),
+            "lt": ("@SP\n"
+                   "M=M-1\n"
+                   "A=M\n"
+                   "D=M\n"
+                   "@SP\n"
+                   "M=M-1\n"
+                   "A=M\n"
+                   "D=M-D\n"
+                   "@IS_LT_{0}\n"
+                   "D;JLT\n"
+                   "(NOT_LT_{0})\n"
+                   "D=0\n"
+                   "@SET_RESULT_{0}\n"
+                   "0;JMP\n"
+                   "(IS_LT_{0})\n"
+                   "D=-1\n"
+                   "(SET_RESULT_{0})\n"
+                   "@SP\n"
+                   "A=M\n"
+                   "M=D\n"
+                   "@SP\n"
+                   "M=M+1\n"),
+            "gt": ("@SP\n"
+                   "M=M-1\n"
+                   "A=M\n"
+                   "D=M\n"
+                   "@SP\n"
+                   "M=M-1\n"
+                   "A=M\n"
+                   "D=M-D\n"
+                   "@IS_GT_{0}\n"
+                   "D;JGT\n"
+                   "(NOT_GT_{0})\n"
+                   "D=0\n"
+                   "@SET_RESULT_{0}\n"
+                   "0;JMP\n"
+                   "(IS_GT_{0})\n"
+                   "D=-1\n"
+                   "(SET_RESULT_{0})\n"
+                   "@SP\n"
+                   "A=M\n"
+                   "M=D\n"
+                   "@SP\n"
+                   "M=M+1\n"),
+            "C_END": "(END)\n@END\n0;JMP\n"
+        }
+        self._d_segment = {
+            "local": "LCL",
+            "argument": "ARG",
+            "this": "THIS",
+            "that": "THAT",
+            "constant": "",
+            "static": "",
+            "pointer": "",
+            "temp": ""
+        }
 
-    @classmethod
-    def symbol(cls, s):
-        return cls.d_symbol[s]
+    def symbol(self, s):
+        if s in self._d_symbol:
+            return self._d_symbol[s]
+        else:
+            return ""
+
+    def write_comment(self, comment):
+        self.file.write(comment)
+
+    def write_arithmetic(self, command):
+        self.file.write(self.symbol(command).format(self.cnt))
+        if command in ("eq", "lt", "gt"):
+            self.cnt += 1
+
+    def write_push_pop(self, command, segment, index):
+        if segment == "constant":
+            self.file.write(self.symbol(command).format(index))
+        elif segment == "static":
+            self.file.write("@SP\nM=M-1\n@SP\nA=M\nD=M\n")
+            self.file.write("@{0}.{1}\nM=D\n".format(self.prog_name, index))
+        elif segment == "temp":
+            # push:     addr = 5 + 1, *SP = *addr, SP++
+            # pop:     addr = 5 + 1, *SP --, *addr = *SP
+            self.file.write(self.symbol(command).format(int(index)+5))
+        elif segment == "pointer":
+            if index == "0":
+                segment = self.symbol("this")
+            elif index == "1":
+                segment = self.symbol("that")
+            if command == "C_PUSH":
+                # push:     *SP = THIS, SP++
+                # pop:      SP--, THIS = *SP
+                self.file.write("@{0}\nD=A\n@SP\nA=M\nM=D\n@SP\nM=M+1\n".format(segment))
+            elif command == "C_POP":
+                # push:     *SP = THAT, SP++
+                # pop:      SP--, THAT = *SP
+                self.file.write("@{0}\nD=A\n@SP\nM=M-1\n@SP\nA=M\nM=D\n".format(segment))
+        else:
+            location = "@{0}\nD=A\n@{1}\nA=D+M\n".format(index, segment)
+            self.file.write(self.symbol(command).format(location))
+
+    def close(self):
+        self.write_comment("//end\n")
+        self.file.write(self.symbol("C_END"))
+        self.file.close()
 
 
 class VMTranslator:
+    # drives the process
     def __init__(self, f_name):
         l_split = f_name.split('.')
-        self.prog_name = l_split[0]
-        infile = open(f_name, 'r')
-        parser = Parser(infile)
-        outfile = open(self.prog_name + '.asm', 'w')
+        # Parser handles the input file
+        parser = Parser(f_name)
+        code_writer = CodeWriter(l_split[0])
         while parser.has_more_commands():
             parser.advance()
-            code = None
-            if parser.commandType == "push":
-                code = Code.symbol(parser.commandType).format(parser.location)
-            if code:
-                outfile.write(code + '\n')
+            command = None
+            # CodeWriter to handle the input file - uses class methods and is not instantiated
+            if parser.commandType == "C_PUSH":
+                code_writer.write_comment(parser.comment)
+                code_writer.write_push_pop(parser.commandType, parser.arg1, parser.arg2)
+            elif parser.commandType == "C_POP":
+                code_writer.write_comment(parser.comment)
+                code_writer.write_push_pop(parser.commandType, parser.arg1, parser.arg2)
+            elif parser.commandType == "C_ARITHMETIC":
+                code_writer.write_comment(parser.comment)
+                code_writer.write_arithmetic(parser.arg1)
 
-        infile.close()
-        outfile.close()
+        parser.close()
+        code_writer.close()
 
 
 if __name__ == '__main__':
+    # StackArithmetic\SimpleAdd\SimpleAdd.vm
+    # StackArithmetic\StackTest\StackTest.vm
     if debug:
         print("argv[0]: ", sys.argv[0])
         print("argv[1]: ", sys.argv[1])
