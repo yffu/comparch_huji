@@ -70,10 +70,31 @@ class CodeWriter:
         self.file = outfile = open(prog_name + '.asm', 'w')
         self._d_symbol = {
             # addr = segmentPointer + i, *SP = *addr, SP++
-            "C_PUSH": "@{0}\nD=A\n@SP\nA=M\nM=D\n@SP\nM=M+1\n",
+            "C_PUSH":
+                ("{0}\n"
+                 "D=A\n"
+                 "@SP\n"
+                 "A=M\n"
+                 "M=D\n"
+                 "@SP\n"
+                 "M=M+1\n"),
             # addr = segmentPointer + i, *SP--, *addr = *SP
-            "C_POP": "@{0}\nD=M\n@SP\nM=M-1\n@SP\nA=M\nM=D\n",
-            "C_PUSH_pointer": "@{0}\nD=A\n@SP\nA=M\nM=D\n@SP\nM=M+1\n",
+            "C_POP":
+                ("@SP\n"
+                 "M=M-1\n"
+                 "@SP\n"
+                 "A=M\n"
+                 "D=M\n"
+                 "{0}\n"
+                 "M=D\n"),
+            "C_PUSH_pointer":
+                ("@{0}\n"
+                 "D=A\n"
+                 "@SP\n"
+                 "A=M\n"
+                 "M=D\n"
+                 "@SP\n"
+                 "M=M+1\n"),
             "add": ("@SP\n"
                     "M=M-1\n"
                     "A=M\n"
@@ -211,6 +232,12 @@ class CodeWriter:
         else:
             return ""
 
+    def seg_var(self, s):
+        if s in self._d_segment:
+            return self._d_segment[s]
+        else:
+            return ""
+
     def write_comment(self, comment):
         self.file.write(comment)
 
@@ -221,14 +248,24 @@ class CodeWriter:
 
     def write_push_pop(self, command, segment, index):
         if segment == "constant":
-            self.file.write(self.symbol(command).format(index))
+            self.file.write(self.symbol(command).format("@"+index))
         elif segment == "static":
             self.file.write("@SP\nM=M-1\n@SP\nA=M\nD=M\n")
             self.file.write("@{0}.{1}\nM=D\n".format(self.prog_name, index))
         elif segment == "temp":
-            # push:     addr = 5 + 1, *SP = *addr, SP++
-            # pop:     addr = 5 + 1, *SP --, *addr = *SP
-            self.file.write(self.symbol(command).format(int(index)+5))
+            # push:     addr = 5 + i, *SP = *addr, SP++
+            if command == "C_PUSH":
+                code = ("{0}\n"
+                 "D=M\n"
+                 "@SP\n"
+                 "A=M\n"
+                 "M=D\n"
+                 "@SP\n"
+                 "M=M+1\n")
+                self.file.write(code.format(f"@{int(index)+5}"))
+            # pop:     addr = 5 + i, *SP --, *addr = *SP
+            elif command == "C_POP":
+                self.file.write(self.symbol(command).format(f"@{int(index)+5}"))
         elif segment == "pointer":
             if index == "0":
                 segment = self.symbol("this")
@@ -243,8 +280,35 @@ class CodeWriter:
                 # pop:      SP--, THAT = *SP
                 self.file.write("@{0}\nD=A\n@SP\nM=M-1\n@SP\nA=M\nM=D\n".format(segment))
         else:
-            location = "@{0}\nD=A\n@{1}\nA=D+M\n".format(index, segment)
-            self.file.write(self.symbol(command).format(location))
+            if command == "C_PUSH":
+                code = (
+                 "@{0}\n"
+                 "D=M\n"
+                 "@{1}\n"
+                 "A=D+A\n"
+                 "D=M\n"
+                 "@SP\n"
+                 "A=M\n"
+                 "M=D\n"
+                 "@SP\n"
+                 "M=M+1\n")
+                self.file.write(code.format(self.seg_var(segment), index))
+            elif command == "C_POP":
+                code = (
+                 "@{0}\n"
+                 "D=M\n"
+                 "@{1}\n"
+                 "D=D+A\n"
+                 "@SP\n"
+                 "M=M-1\n"
+                 "A=M+1\n"
+                 "M=D\n"
+                 "A=A-1\n"
+                 "D=M\n"
+                 "A=A+1\n"
+                 "A=M\n"
+                 "M=D\n")
+                self.file.write(code.format(self.seg_var(segment), index))
 
     def close(self):
         self.write_comment("//end\n")
@@ -280,6 +344,7 @@ class VMTranslator:
 if __name__ == '__main__':
     # StackArithmetic\SimpleAdd\SimpleAdd.vm
     # StackArithmetic\StackTest\StackTest.vm
+    # MemoryAccess\BasicTest\BasicTest.vm
     if debug:
         print("argv[0]: ", sys.argv[0])
         print("argv[1]: ", sys.argv[1])
