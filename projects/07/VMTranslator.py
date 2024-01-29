@@ -250,8 +250,26 @@ class CodeWriter:
         if segment == "constant":
             self.file.write(self.symbol(command).format("@"+index))
         elif segment == "static":
-            self.file.write("@SP\nM=M-1\n@SP\nA=M\nD=M\n")
-            self.file.write("@{0}.{1}\nM=D\n".format(self.prog_name, index))
+            if command == "C_PUSH":
+                code = (
+                    "@{0}.{1}\n"
+                    "D=M\n"
+                    "@SP\n"
+                    "A=M\n"
+                    "M=D\n"
+                    "@SP\n"
+                    "M=M+1\n"
+                )
+                self.file.write(code.format("StaticText", index))
+            elif command == "C_POP":
+                code = (
+                    "@SP\n"
+                    "AM=M-1\n"
+                    "D=M\n"
+                    "@{0}.{1}\n"
+                    "M=D\n"
+                )
+                self.file.write(code.format("StaticText", index))
         elif segment == "temp":
             # push:     addr = 5 + i, *SP = *addr, SP++
             if command == "C_PUSH":
@@ -268,17 +286,33 @@ class CodeWriter:
                 self.file.write(self.symbol(command).format(f"@{int(index)+5}"))
         elif segment == "pointer":
             if index == "0":
-                segment = self.symbol("this")
+                segment = self.seg_var("this")
             elif index == "1":
-                segment = self.symbol("that")
+                segment = self.seg_var("that")
             if command == "C_PUSH":
                 # push:     *SP = THIS, SP++
-                # pop:      SP--, THIS = *SP
-                self.file.write("@{0}\nD=A\n@SP\nA=M\nM=D\n@SP\nM=M+1\n".format(segment))
+                code = (
+                    "@{0}\n"
+                    "D=M\n"
+                    "@SP\n"
+                    "A=M\n"
+                    "M=D\n"
+                    "@SP\n"
+                    "M=M+1\n"
+                )
+                self.file.write(code.format(segment))
             elif command == "C_POP":
-                # push:     *SP = THAT, SP++
                 # pop:      SP--, THAT = *SP
-                self.file.write("@{0}\nD=A\n@SP\nM=M-1\n@SP\nA=M\nM=D\n".format(segment))
+                code = (
+                    "@SP\n"
+                    "M=M-1\n"
+                    "@SP\n"
+                    "A=M\n"
+                    "D=M\n"
+                    "@{0}\n"
+                    "M=D\n"
+                )
+                self.file.write(code.format(segment))
         else:
             if command == "C_PUSH":
                 code = (
@@ -345,6 +379,8 @@ if __name__ == '__main__':
     # StackArithmetic\SimpleAdd\SimpleAdd.vm
     # StackArithmetic\StackTest\StackTest.vm
     # MemoryAccess\BasicTest\BasicTest.vm
+    # MemoryAccess\PointerTest\PointerTest.vm
+    # MemoryAccess\StaticTest\StaticTest.vm
     if debug:
         print("argv[0]: ", sys.argv[0])
         print("argv[1]: ", sys.argv[1])
